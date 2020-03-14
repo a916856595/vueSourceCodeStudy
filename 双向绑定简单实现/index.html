@@ -19,20 +19,20 @@
             },
             value: '输入框的值',
         },
-        // template: `
-        //     <div>
-        //     {{title}} {{ title + 1 }}
-        //         <h1>{{title}}</h1>
-        //         <br />
-        //         <span v-bind="value"></span>
-        //         <input type="text" v-model="value">
-        //     </div>
-        // `
         template: `
             <div>
-                { {title}} 1{ { title } }1
+            {{title}} {{ innerData.childTitle}}
+                <h1>{{title}}</h1>
+                <br />
+                <span v-bind="value"></span>
+                <input type="text" v-model="value">
             </div>
         `
+        // template: `
+        //     <div>
+        //         { {title}} 1{ { title } }1
+        //     </div>
+        // `
     })
     console.log(App)
 </script>

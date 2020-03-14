@@ -31,7 +31,7 @@
 
     const regExp = {
         templateString: /{\s*{(.*?)}\s*}/g,     // 匹配单个表达式,包括花括号
-        variable: /[a-zA-Z]+[\w]?/,             // 匹配表达式中的变量名称
+        variable: /[a-zA-Z]+(\.?\w)*/,          // 匹配表达式中的变量名称,包括取对象的属性
         expressionUselessPart: /{\s*{|}\s*}/g,  // 匹配单个表达式中的花括号
     };
 
@@ -39,10 +39,17 @@
         constructor(vm) {
             this.data = vm.$data;
         }
+        // 获取数据的方法，field是$data的属性名称，以(.)组合
         get (field) {
             return field.split('.').reduce((currentData, fieldName) => {
                 return currentData[fieldName];
             }, this.data);
+        }
+    }
+
+    class Directive {
+        static isDirective (node) {
+
         }
     }
 
@@ -56,7 +63,7 @@
             this.mount(virtualDom, vm.$el);
         }
         transformTemplateToVirtualDom (template) {
-            // 这里不使用DocumentFragment原因是它没有innerHTML属性
+            // 这里不使用DocumentFragment,原因是它不能使用innerHTML属性
             const temporaryNode = document.createElement('div');
             // 将临时节点的内容替换成功模板的内容
             temporaryNode.innerHTML = template;
