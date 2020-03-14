@@ -26,7 +26,24 @@
     const arrMethods = {
         forEach (source, func, instance) {
             Array.prototype.forEach.call(source, func, instance);
-        }
+        },
+        map (source, func, instance) {
+            Array.prototype.map.call(source, func, instance);
+        },
+        // 将指定位置的数组项移动到第一个
+        moveToFirst (arr, index) {
+            arr.unshift(arr.splice(index, 1)[0]);
+        },
+    };
+
+    const strMethods = {
+      firstLetterToUpperCase (str) {
+          let result = '';
+          if (str.length) {
+              result = `${str[0].toUpperCase()}${str.slice(1)}`;
+          }
+          return result;
+      }
     };
 
     const regExp = {
@@ -36,20 +53,135 @@
     };
 
     class DataMethods {
-        constructor(vm) {
-            this.data = vm.$data;
-        }
         // 获取数据的方法，field是$data的属性名称，以(.)组合
-        get (field) {
+        static getValue (dataObject, field) {
             return field.split('.').reduce((currentData, fieldName) => {
                 return currentData[fieldName];
-            }, this.data);
+            }, dataObject);
+        };
+        // 批量获取值
+        static mapGetValue (dataObject, fields) {
+            if (!fields) return [];
+            return fields.map(field => {
+                return DataMethods.getValue(dataObject, field);
+            });
         }
     }
 
     class Directive {
-        static isDirective (node) {
+        // TODO 当前只支持(v-)开头的指令，后续添加（：）（@）
+        static directiveRegExp = /^v-\w+/;
+        // 匹配指令属性的标识
+        static directiveUselessPartRegExp = /^v-/;
+        // 内置指令生效的顺序,为了方便调用unshift方法，这里倒序
+        static builtInDirectiveEffectiveOrderList = ['if'];
+        // static builtInDirectiveEffectiveOrderList = ['text', 'if', 'for'];
+        // 获取指令属性List
+        static getDirectives (node) {
+            const directives = [];
+            const attributes = node.attributes;
+            const attributesLength = attributes.length;
+            if (attributesLength) {
+                // 将解析后的指令信息放入List
+                arrMethods.forEach(attributes, attribute => {
+                    // 只有通过校验的属性才认为是指令
+                    if (this.checkAttributeIsDirective(attribute)) {
+                        directives.push(this.getDirectiveDescription(attribute));
+                    }
+                });
+            }
+            return directives;
+        }
+        // 解析并返回指令信息
+        static getDirectiveDescription (attribute) {
+            const { name, value } = attribute;
+            return {
+                originKey: name,                 // 原始指令名称
+                key: this.getDirectiveKey(name), // 指令名称
+                value,                           // 指令的值
+            }
+        }
+        // 获取单个指令的名称，不包含前缀
+        static getDirectiveKey (keyField) {
+            return keyField.replace(this.directiveUselessPartRegExp, '');
+        }
+        // 校验属性是否是一个指令属性
+        static checkAttributeIsDirective (attribute) {
+            const { name } = attribute;
+            return this.directiveRegExp.test(name);
+        }
+    }
 
+    class DirectiveNode extends Directive {
+        node = null;
+        // 编译指令节点
+        constructor (vm, node, directives) {
+            super();
+            // 首先获取将要执行的指令类型及顺序
+            Directive.builtInDirectiveEffectiveOrderList.forEach(builtInDirectiveName => {
+                directives.forEach((directiveInfo, directiveIndex) => {
+                    const { key } = directiveInfo;
+                    // 如果指令名称匹配成功则依次移动到数组的第一项
+                    if (builtInDirectiveName === key) arrMethods.moveToFirst(directives, directiveIndex);
+                });
+            });
+            this.updateDirectiveNode(vm, node, directives);
+        }
+        updateDirectiveNode (vm, node, directives) {
+            // 迭代编译指令,如果返回null,则结束编译
+            directives.every(directiveInfo => {
+                const { key, originKey } = directiveInfo;
+                // 获取内置指令的编译名称
+                const compileMethodName = BuiltInDirectiveCompileMethods.getCompileMethodName(key);
+                // 如果没有匹配到方法名称，则说明当前指令未注册，将节点原样返回机修编译
+                if (!compileMethodName) {
+                    throw(new Error(`[warn] directive name ${originKey} is not registered!`));
+                    return node;
+                }
+                this.node = BuiltInDirectiveCompileMethods[compileMethodName](vm, node, directiveInfo);
+            })
+        }
+    }
+
+    class BuiltInDirectiveCompileMethods {
+        // 获取编译内置指令的方法名
+        static getCompileMethodName (keyOfMethod) {
+            if (Directive.builtInDirectiveEffectiveOrderList.includes(keyOfMethod)) {
+                const middleStr = strMethods.firstLetterToUpperCase(keyOfMethod);
+                return `compile${middleStr}Directive`;
+            }
+        }
+        // 编译if指令
+        static compileIfDirective (vm, node, directiveInfo) {
+            const { value } = directiveInfo;
+            const expressionResult = Expression.getExpressionResult(vm, value);
+            if (expressionResult) return node;
+            return null;
+        }
+    }
+
+    // 表达式类
+    class Expression {
+        // 匹配模板中的变量
+        static variableRegExp = /(?<!['"\w$]\s*)[_$a-zA-Z]+(\.?[\w]+)*(?!\s*['"\w$])/g;
+        static getExpressionResult (vm, expression) {
+            // 获取变量名称列表
+            const variableNameLise = expression.match(this.variableRegExp);
+            const functionBody = `return ${expression}`;
+            let paramsOfFunction = [functionBody];
+            // 如果没有找到变量就是null
+            if (variableNameLise) {
+                paramsOfFunction = variableNameLise.concat(paramsOfFunction);
+            }
+            let fn;
+            // 如果表达式解析失败，则抛出异常及表达式
+            try {
+                fn = new Function(...paramsOfFunction);
+            } catch (err) {
+                throw(new Error(`[warn] parse expression ${expression} error!`));
+            }
+            const paramsOfCallFunction = DataMethods.mapGetValue(vm.$data, variableNameLise);
+            return fn(...paramsOfCallFunction);
         }
     }
 
@@ -81,7 +213,14 @@
         }
         // 对元素节点进行修改
         transformElementNode (vm, node) {
-
+            // 获取指令List
+            const nodeDirectives = Directive.getDirectives(node);
+            const parentNode = node.parentNode;
+            let nodeAfterCompile = null;
+            if (nodeDirectives.length) {
+                nodeAfterCompile = new DirectiveNode(vm, node, nodeDirectives).node;
+            }
+            if (nodeAfterCompile === null) parentNode.removeChild(node);
         }
         // 对文本节点进行修改
         transformTextNode (vm, node) {
@@ -91,7 +230,7 @@
                     const currentExpression = strMatched.replace(regExp.expressionUselessPart, '');
                     // 将表达式中的变量替换为变量值
                     return currentExpression.replace(regExp.variable, variableField => {
-                        return vm.$dataMethods.get(variableField);
+                        return DataMethods.getValue(vm.$data, variableField);
                     });
                 });
             node.textContent = resultString;
@@ -142,7 +281,6 @@
         const vm = this;
         vm.$el = element;                       // 挂载的元素
         vm.$data = data;                        // 内容为数据
-        vm.$dataMethods = new DataMethods(vm);  // 包含一些操作数据的方法,需要先挂载数据后调用
         vm.$template = template;                // 模板字符串内容
         // 劫持数据对象
         vm.$observer = new Observer(vm);        // 包含观测数据的方法
