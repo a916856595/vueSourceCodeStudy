@@ -52,7 +52,17 @@
             return field.split('.').reduce((currentData, fieldName) => {
                 return currentData[fieldName];
             }, dataObject);
-        };
+        }
+        // 设置值的方法
+        static setValue (dataObject, field, value) {
+            const fieldNameList = field.split('.');
+            const length = fieldNameList.length;
+            const lastField = fieldNameList[length - 1];
+            const fatherObject = fieldNameList.slice(0, length - 1).reduce((currentData, fieldName) => {
+                return currentData[fieldName];
+            }, dataObject);
+            fatherObject[lastField] = value;
+        }
         // 批量获取值
         static mapGetValue (dataObject, fields) {
             if (!fields) return [];
@@ -88,8 +98,9 @@
             const { name, value } = attribute;
             return {
                 originKey: name,                 // 原始指令名称
+                originValue: value,              // 原指令值
                 key: this.getDirectiveKey(name), // 指令名称
-                value: Expression.getExpressionResult(vm, value),                           // 指令的值
+                value: Expression.getExpressionResult(vm, value),   // 指令的值
             }
         }
         // 获取单个指令的名称，不包含前缀
@@ -119,6 +130,7 @@
             this.updateDirectiveNode(vm, node, directives);
         }
         updateDirectiveNode (vm, node, directives) {
+            const elementNode = new ElementNode(node);
             // 迭代编译指令,如果返回null,则结束编译
             directives.every(directiveInfo => {
                 const { key, originKey } = directiveInfo;
@@ -127,16 +139,16 @@
                 // 如果没有匹配到方法名称，则说明当前指令未注册，将节点原样返回继续编译
                 if (!compileMethodName) {
                     throw(new Error(`[warn] directive name ${originKey} is not registered!`));
-                    return node;
+                    return elementNode.getNode();
                 }
-                this.node = BuiltInDirectiveCompileMethods[compileMethodName](vm, node, directiveInfo);
+                this.node = BuiltInDirectiveCompileMethods[compileMethodName](vm, elementNode, directiveInfo);
             })
         }
     }
 
     class BuiltInDirectiveCompileMethods {
         // 内置指令生效的顺序,为了方便调用unshift方法，这里倒序;
-        static builtInDirectiveEffectiveOrderList = ['text', 'if', 'for'];
+        static builtInDirectiveEffectiveOrderList = ['model', 'text', 'if', 'for'];
         // 获取编译内置指令的方法名
         static getCompileMethodName (keyOfMethod) {
             if (this.builtInDirectiveEffectiveOrderList.includes(keyOfMethod)) {
@@ -145,14 +157,27 @@
             }
         }
         // 编译if指令
-        static compileIfDirective (vm, node, directiveInfo) {
+        static compileIfDirective (vm, elementNode, directiveInfo) {
             const { value } = directiveInfo;
-            if (value) return node;
+            if (value) return elementNode.getNode();
             return null;
         }
-        static compileTextDirective (vm, node, directiveInfo) {
+        static compileTextDirective (vm, elementNode, directiveInfo) {
             const { value } = directiveInfo;
+            const node = elementNode.getNode();
             node.innerText = value;
+            return node;
+        }
+        static compileModelDirective (vm, elementNode, directiveInfo) {
+            const { value, originValue } = directiveInfo;
+            const node = elementNode.getNode();
+            if (elementNode.isInputNode) {
+                node.value = value;
+                node.addEventListener('input', event => {
+                    const inputValue = event.target.value;
+                    DataMethods.setValue(vm.$data, originValue, inputValue);
+                });
+            } else node.innerText = value;
             return node;
         }
     }
@@ -297,6 +322,7 @@
                     return value;
                 },
                 set: (newValue) => {
+                    console.log(fieldName + '=>' + newValue)
                     // 在给数据重新赋值的时候，需要检查新值是否为对象，如果是，那么需要观察数据
                     if (utilities.isObject(newValue)) {
                         this.observeObject(newValue);
@@ -304,6 +330,19 @@
                     value = newValue;
                 }
             })
+        }
+    }
+
+    class ElementNode {
+        static inputNodeNameList = ['input', 'select', 'textarea'];
+        // 获取节点标签类型
+        constructor(node) {
+            this.isInputNode = ElementNode.inputNodeNameList.includes(node.nodeName.toLowerCase());
+            this.node = node;
+        }
+        // 获取节点
+        getNode () {
+            return this.node;
         }
     }
 
