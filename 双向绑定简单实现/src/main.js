@@ -46,12 +46,6 @@
       }
     };
 
-    const regExp = {
-        templateString: /{\s*{(.*?)}\s*}/g,     // 匹配单个表达式,包括花括号
-        variable: /[a-zA-Z]+(\.?\w)*/,          // 匹配表达式中的变量名称,包括取对象的属性
-        expressionUselessPart: /{\s*{|}\s*}/g,  // 匹配单个表达式中的花括号
-    };
-
     class DataMethods {
         // 获取数据的方法，field是$data的属性名称，以(.)组合
         static getValue (dataObject, field) {
@@ -73,11 +67,8 @@
         static directiveRegExp = /^v-\w+/;
         // 匹配指令属性的标识
         static directiveUselessPartRegExp = /^v-/;
-        // 内置指令生效的顺序,为了方便调用unshift方法，这里倒序
-        static builtInDirectiveEffectiveOrderList = ['if'];
-        // static builtInDirectiveEffectiveOrderList = ['text', 'if', 'for'];
         // 获取指令属性List
-        static getDirectives (node) {
+        static getDirectives (vm, node) {
             const directives = [];
             const attributes = node.attributes;
             const attributesLength = attributes.length;
@@ -86,19 +77,19 @@
                 arrMethods.forEach(attributes, attribute => {
                     // 只有通过校验的属性才认为是指令
                     if (this.checkAttributeIsDirective(attribute)) {
-                        directives.push(this.getDirectiveDescription(attribute));
+                        directives.push(this.getDirectiveDescription(vm, attribute));
                     }
                 });
             }
             return directives;
         }
         // 解析并返回指令信息
-        static getDirectiveDescription (attribute) {
+        static getDirectiveDescription (vm, attribute) {
             const { name, value } = attribute;
             return {
                 originKey: name,                 // 原始指令名称
                 key: this.getDirectiveKey(name), // 指令名称
-                value,                           // 指令的值
+                value: Expression.getExpressionResult(vm, value),                           // 指令的值
             }
         }
         // 获取单个指令的名称，不包含前缀
@@ -118,7 +109,7 @@
         constructor (vm, node, directives) {
             super();
             // 首先获取将要执行的指令类型及顺序
-            Directive.builtInDirectiveEffectiveOrderList.forEach(builtInDirectiveName => {
+            BuiltInDirectiveCompileMethods.builtInDirectiveEffectiveOrderList.forEach(builtInDirectiveName => {
                 directives.forEach((directiveInfo, directiveIndex) => {
                     const { key } = directiveInfo;
                     // 如果指令名称匹配成功则依次移动到数组的第一项
@@ -133,7 +124,7 @@
                 const { key, originKey } = directiveInfo;
                 // 获取内置指令的编译名称
                 const compileMethodName = BuiltInDirectiveCompileMethods.getCompileMethodName(key);
-                // 如果没有匹配到方法名称，则说明当前指令未注册，将节点原样返回机修编译
+                // 如果没有匹配到方法名称，则说明当前指令未注册，将节点原样返回继续编译
                 if (!compileMethodName) {
                     throw(new Error(`[warn] directive name ${originKey} is not registered!`));
                     return node;
@@ -144,9 +135,11 @@
     }
 
     class BuiltInDirectiveCompileMethods {
+        // 内置指令生效的顺序,为了方便调用unshift方法，这里倒序;
+        static builtInDirectiveEffectiveOrderList = ['text', 'if', 'for'];
         // 获取编译内置指令的方法名
         static getCompileMethodName (keyOfMethod) {
-            if (Directive.builtInDirectiveEffectiveOrderList.includes(keyOfMethod)) {
+            if (this.builtInDirectiveEffectiveOrderList.includes(keyOfMethod)) {
                 const middleStr = strMethods.firstLetterToUpperCase(keyOfMethod);
                 return `compile${middleStr}Directive`;
             }
@@ -154,34 +147,64 @@
         // 编译if指令
         static compileIfDirective (vm, node, directiveInfo) {
             const { value } = directiveInfo;
-            const expressionResult = Expression.getExpressionResult(vm, value);
-            if (expressionResult) return node;
+            if (value) return node;
             return null;
+        }
+        static compileTextDirective (vm, node, directiveInfo) {
+            const { value } = directiveInfo;
+            node.innerText = value;
+            return node;
         }
     }
 
     // 表达式类
     class Expression {
         // 匹配模板中的变量
-        static variableRegExp = /(?<!['"\w$]\s*)[_$a-zA-Z]+(\.?[\w]+)*(?!\s*['"\w$])/g;
+        static variableRegExp = /(?<!(['"\w$]\s*|true))[_$a-zA-Z]+(\.?[\w]+)*(?!\s*['"\w$])/g;
+        static templateString =  /{\s*{(.*?)}\s*}/g;        // 匹配单个表达式,包括花括号
+        static expressionUselessPart =  /{\s*{|}\s*}/g;     // 匹配单个表达式中的花括号
+        static globalVariableNameList = ['true', 'false', 'undefined', 'null'];
         static getExpressionResult (vm, expression) {
             // 获取变量名称列表
-            const variableNameLise = expression.match(this.variableRegExp);
+            let variableNameLise = expression.match(this.variableRegExp);
+            // 过滤全局常量
+            if (variableNameLise) variableNameLise = this.getFilterGlobalVariable(variableNameLise);
             const functionBody = `return ${expression}`;
             let paramsOfFunction = [functionBody];
             // 如果没有找到变量就是null
             if (variableNameLise) {
                 paramsOfFunction = variableNameLise.concat(paramsOfFunction);
             }
+            // console.log(paramsOfFunction)
             let fn;
             // 如果表达式解析失败，则抛出异常及表达式
             try {
                 fn = new Function(...paramsOfFunction);
             } catch (err) {
-                throw(new Error(`[warn] parse expression ${expression} error!`));
+                throw(new Error(`[warn] parse expression [${expression}] error!`));
             }
             const paramsOfCallFunction = DataMethods.mapGetValue(vm.$data, variableNameLise);
             return fn(...paramsOfCallFunction);
+        };
+        static getTemplateExpressionResult (vm, node) {
+            return node.textContent
+                .replace(this.templateString, strMatched => {  // 匹配到所有的{{ }}内容
+                    // 去除表达式的花括号
+                    const currentExpression = strMatched.replace(this.expressionUselessPart, '');
+                    // 将表达式中的变量替换为变量值
+                    return this.getExpressionResult(vm, currentExpression);
+                });
+        }
+        // 排除掉true,false等全局常量
+        static getFilterGlobalVariable (variablesList) {
+            let result = null;
+            if (variablesList) {
+               result = [];
+               variablesList.forEach(variableName => {
+                   if (!this.globalVariableNameList.includes(variableName)) result.push(variableName);
+               });
+            }
+            return result;
         }
     }
 
@@ -214,7 +237,7 @@
         // 对元素节点进行修改
         transformElementNode (vm, node) {
             // 获取指令List
-            const nodeDirectives = Directive.getDirectives(node);
+            const nodeDirectives = Directive.getDirectives(vm, node);
             const parentNode = node.parentNode;
             let nodeAfterCompile = null;
             if (nodeDirectives.length) {
@@ -224,16 +247,8 @@
         }
         // 对文本节点进行修改
         transformTextNode (vm, node) {
-            const resultString = node.textContent
-                .replace(regExp.templateString, strMatched => {  // 匹配到所有的{{ }}内容
-                    // 去除表达式的花括号
-                    const currentExpression = strMatched.replace(regExp.expressionUselessPart, '');
-                    // 将表达式中的变量替换为变量值
-                    return currentExpression.replace(regExp.variable, variableField => {
-                        return DataMethods.getValue(vm.$data, variableField);
-                    });
-                });
-            node.textContent = resultString;
+            const expressionResult = Expression.getTemplateExpressionResult(vm, node);
+            node.textContent = expressionResult;
         }
         mount (sourceElement, targetElement) {
             // 通过父节点替换节点

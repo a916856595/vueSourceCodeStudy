@@ -12,19 +12,22 @@
     const App = new Vue({
         el: '#app',
         data: {
-            title: '双向绑定简单实现2',
+            title: '双向绑定简单实现3',
             innerData: {
                 childTitle: '学习js',
                 content: '整个牛项目2',
             },
             value: 0,
+            str1: '文本1',
+            str2: '文本2',
+            bindValue: '通过v-text挂载的值'
         },
         template: `
             <div>
             {{title}} {{ innerData.childTitle}}
                 <h1>{{title}}</h1>
                 <br />
-
+                <span v-text="bindValue"></span>
                 <input type="text" v-if="value">
             </div>
         `
