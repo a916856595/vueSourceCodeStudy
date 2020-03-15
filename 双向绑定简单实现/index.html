@@ -17,15 +17,15 @@
                 childTitle: '学习js',
                 content: '整个牛项目2',
             },
-            value: 0,
+            value: 1,
             str1: '文本1',
             str2: '文本2',
             bindValue: '通过v-text挂载的值'
         },
         template: `
             <div>
-            {{title}} {{ innerData.childTitle}}
-                <h1>{{title}}</h1>
+{{innerData.childTitle + ' ' + innerData.content}}
+                <h1>{{title - title - title}}</h1>
                 <br />
                 <span v-text="bindValue"></span>
                 <input type="text" v-if="value">

@@ -160,22 +160,19 @@
     // 表达式类
     class Expression {
         // 匹配模板中的变量
-        static variableRegExp = /(?<!(['"\w$]\s*|true))[_$a-zA-Z]+(\.?[\w]+)*(?!\s*['"\w$])/g;
-        static templateString =  /{\s*{(.*?)}\s*}/g;        // 匹配单个表达式,包括花括号
-        static expressionUselessPart =  /{\s*{|}\s*}/g;     // 匹配单个表达式中的花括号
+        static expressionVariableRegExp = /(?<!(['"\w$]\s*))[_$a-zA-Z]+(\.?[\w]+)*(?!\s*['"\w$])/g;
+        static variableRegExp = /^[a-zA-Z_$]+[\w$]*$/;              // 匹配标准变量命名方式
+        static expressionStringRegExp =  /{\s*{(.*?)}\s*}/g;        // 匹配单个表达式,包括花括号
+        static expressionUselessPartRegExp =  /{\s*{|}\s*}/g;       // 匹配单个表达式中的花括号
         static globalVariableNameList = ['true', 'false', 'undefined', 'null'];
+        // 获取单个插值表达式的结果
         static getExpressionResult (vm, expression) {
             // 获取变量名称列表
-            let variableNameLise = expression.match(this.variableRegExp);
+            let variableNameList = expression.match(this.expressionVariableRegExp);
             // 过滤全局常量
-            if (variableNameLise) variableNameLise = this.getFilterGlobalVariable(variableNameLise);
-            const functionBody = `return ${expression}`;
-            let paramsOfFunction = [functionBody];
+            if (variableNameList) variableNameList = this.getFilterGlobalVariable(variableNameList);
             // 如果没有找到变量就是null
-            if (variableNameLise) {
-                paramsOfFunction = variableNameLise.concat(paramsOfFunction);
-            }
-            // console.log(paramsOfFunction)
+            const paramsOfFunction = this.getVariablesAndExpressionAfterTransform(variableNameList, expression);
             let fn;
             // 如果表达式解析失败，则抛出异常及表达式
             try {
@@ -183,27 +180,48 @@
             } catch (err) {
                 throw(new Error(`[warn] parse expression [${expression}] error!`));
             }
-            const paramsOfCallFunction = DataMethods.mapGetValue(vm.$data, variableNameLise);
+            const paramsOfCallFunction = DataMethods.mapGetValue(vm.$data, variableNameList);
             return fn(...paramsOfCallFunction);
         };
+        // 获取插值模板的转换结果
         static getTemplateExpressionResult (vm, node) {
             return node.textContent
-                .replace(this.templateString, strMatched => {  // 匹配到所有的{{ }}内容
+                .replace(this.expressionStringRegExp, strMatched => {  // 匹配到所有的{{ }}内容
                     // 去除表达式的花括号
-                    const currentExpression = strMatched.replace(this.expressionUselessPart, '');
+                    const currentExpression = strMatched.replace(this.expressionUselessPartRegExp, '');
                     // 将表达式中的变量替换为变量值
                     return this.getExpressionResult(vm, currentExpression);
                 });
-        }
+        };
         // 排除掉true,false等全局常量
-        static getFilterGlobalVariable (variablesList) {
+        static getFilterGlobalVariable (variables) {
             let result = null;
-            if (variablesList) {
+            if (variables) {
                result = [];
-               variablesList.forEach(variableName => {
+               variables.forEach(variableName => {
                    if (!this.globalVariableNameList.includes(variableName)) result.push(variableName);
                });
             }
+            return result;
+        };
+        // 将包含(.)的取属性变量名称转换成常规变量名并替换表达式中对应的值
+        static getVariablesAndExpressionAfterTransform (variableNameList, expression) {
+            let expressionResult = `return ${expression}`;
+            let result = [];
+            let namedIndex = 0;
+            if (variableNameList) {
+                result = variableNameList.map(variableName => {
+                    if (this.variableRegExp.test(variableName)) {
+                        return variableName;
+                    }
+                    const newName = `$_place${namedIndex}`;
+                    const fieldRegExp = new RegExp(variableName);
+                    expressionResult = expressionResult.replace(fieldRegExp, newName);
+                    namedIndex += 1;
+                    return newName;
+                });
+            }
+            result.push(expressionResult);
             return result;
         }
     }
