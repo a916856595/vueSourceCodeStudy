@@ -305,9 +305,10 @@
             // 获取指令List
             const nodeDirectives = Directive.getDirectives(vm, node);
             const parentNode = node.parentNode;
-            let nodeAfterCompile = null;
+            let nodeAfterCompile = node;
             if (nodeDirectives.length) {
                 nodeAfterCompile = new DirectiveNode(vm, node, nodeDirectives).node;
+                // TODO 这里应实现一个方法记录子节点信息并递归编译,当前仅支持编译第一层
             }
             if (nodeAfterCompile === null) parentNode.removeChild(node);
         }

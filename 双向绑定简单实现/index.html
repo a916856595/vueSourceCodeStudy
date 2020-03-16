@@ -24,7 +24,7 @@
         },
         template: `
             <div>
-                <h1 v-text="title" v-show="innerData.content"></h1>
+                <h1 v-show="innerData.content">{{ title }}</h1>
                 {{ innerData.childTitle + ' ' + innerData.content }}
                 <span>title:</span>
                 <input v-model="innerData.childTitle" />
@@ -32,11 +32,6 @@
                 <input v-model="innerData.content" />
             </div>
         `
-        // template: `
-        //     <div>
-        //         { {title}} 1{ { title } }1
-        //     </div>
-        // `
     })
     console.log(App)
 </script>
