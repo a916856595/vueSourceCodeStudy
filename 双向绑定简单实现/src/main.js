@@ -141,14 +141,14 @@
                     throw(new Error(`[warn] directive name ${originKey} is not registered!`));
                     return elementNode.getNode();
                 }
-                this.node = BuiltInDirectiveCompileMethods[compileMethodName](vm, elementNode, directiveInfo);
+                return this.node = BuiltInDirectiveCompileMethods[compileMethodName](vm, elementNode, directiveInfo);
             })
         }
     }
 
     class BuiltInDirectiveCompileMethods {
         // 内置指令生效的顺序,为了方便调用unshift方法，这里倒序;
-        static builtInDirectiveEffectiveOrderList = ['model', 'text', 'if', 'for'];
+        static builtInDirectiveEffectiveOrderList = ['model', 'text', 'show', 'for'];
         // 获取编译内置指令的方法名
         static getCompileMethodName (keyOfMethod) {
             if (this.builtInDirectiveEffectiveOrderList.includes(keyOfMethod)) {
@@ -157,27 +157,43 @@
             }
         }
         // 编译if指令
-        static compileIfDirective (vm, elementNode, directiveInfo) {
-            const { value } = directiveInfo;
-            if (value) return elementNode.getNode();
-            return null;
+        static compileShowDirective (vm, elementNode, directiveInfo) {
+            const { $eventCenter } = vm;
+            const { value, originValue } = directiveInfo;
+            const node = elementNode.getNode();
+            const changeEvent = newValue => {
+                node.setAttribute('style', `display: ${newValue ? 'block' : 'none'}`);
+            };
+            $eventCenter.publish(originValue, changeEvent);
+            changeEvent(value);
+            return node;
         }
         static compileTextDirective (vm, elementNode, directiveInfo) {
-            const { value } = directiveInfo;
+            const { value, originValue } = directiveInfo;
             const node = elementNode.getNode();
             node.innerText = value;
+            // 发布数据变化事件
+            vm.$eventCenter.publish(originValue, newValue => {
+                node.innerText = newValue;
+            });
             return node;
         }
         static compileModelDirective (vm, elementNode, directiveInfo) {
             const { value, originValue } = directiveInfo;
             const node = elementNode.getNode();
+            let attributeUseByPublish = 'innerText';
             if (elementNode.isInputNode) {
                 node.value = value;
                 node.addEventListener('input', event => {
                     const inputValue = event.target.value;
                     DataMethods.setValue(vm.$data, originValue, inputValue);
                 });
+                attributeUseByPublish = 'value';
             } else node.innerText = value;
+            // 发布数据变化事件
+            vm.$eventCenter.publish(originValue, newValue => {
+                node[attributeUseByPublish] = newValue;
+            });
             return node;
         }
     }
@@ -192,10 +208,8 @@
         static globalVariableNameList = ['true', 'false', 'undefined', 'null'];
         // 获取单个插值表达式的结果
         static getExpressionResult (vm, expression) {
-            // 获取变量名称列表
-            let variableNameList = expression.match(this.expressionVariableRegExp);
             // 过滤全局常量
-            if (variableNameList) variableNameList = this.getFilterGlobalVariable(variableNameList);
+            const variableNameList = this.getExpressionVariableNameListAfterFilter(expression);
             // 如果没有找到变量就是null
             const paramsOfFunction = this.getVariablesAndExpressionAfterTransform(variableNameList, expression);
             let fn;
@@ -208,15 +222,24 @@
             const paramsOfCallFunction = DataMethods.mapGetValue(vm.$data, variableNameList);
             return fn(...paramsOfCallFunction);
         };
+        static getExpressionVariableNameListAfterFilter (expression) {
+            // 获取变量名称列表
+            let variableNameList = expression.match(this.expressionVariableRegExp);
+            // 过滤全局常量
+            if (variableNameList) variableNameList = this.getFilterGlobalVariable(variableNameList);
+            return variableNameList;
+        }
         // 获取插值模板的转换结果
         static getTemplateExpressionResult (vm, node) {
-            return node.textContent
-                .replace(this.expressionStringRegExp, strMatched => {  // 匹配到所有的{{ }}内容
-                    // 去除表达式的花括号
-                    const currentExpression = strMatched.replace(this.expressionUselessPartRegExp, '');
-                    // 将表达式中的变量替换为变量值
-                    return this.getExpressionResult(vm, currentExpression);
-                });
+            // 这里需要将模板内容保存起来，用于下次更新模板
+            if (!node.templateString) node.templateString = node.textContent;
+            const expressionResult = node.templateString.replace(this.expressionStringRegExp, strMatched => {  // 匹配到所有的{{ }}内容
+                // 去除表达式的花括号
+                const currentExpression = strMatched.replace(this.expressionUselessPartRegExp, '');
+                // 将表达式中的变量替换为变量值
+                return this.getExpressionResult(vm, currentExpression);
+            });
+            return expressionResult;
         };
         // 排除掉true,false等全局常量
         static getFilterGlobalVariable (variables) {
@@ -290,8 +313,9 @@
         }
         // 对文本节点进行修改
         transformTextNode (vm, node) {
-            const expressionResult = Expression.getTemplateExpressionResult(vm, node);
-            node.textContent = expressionResult;
+            const contentNode = new ContentNode(node);
+            contentNode.addEventListener(vm);
+            contentNode.updateContent(vm);
         }
         mount (sourceElement, targetElement) {
             // 通过父节点替换节点
@@ -299,24 +323,63 @@
         }
     }
 
+    // 事件中心，记录、添加、执行vue实例上发布的事件
+    class EventCenter {
+        // 初始化跟节点
+        constructor() {
+            this.name = 'root';
+            this.children = {};
+            this.events = [];
+        }
+        // 发布单个事件
+        publish (fields, event) {
+            const currentEventCenter = fields.split('.').reduce((currentCenter, field) => {
+                const center = currentCenter.children[field];
+                if (center) return center;
+                return currentCenter.children[field] = {
+                    name: field,
+                    children: {},
+                    events: [],
+                };
+            }, this);
+            currentEventCenter.events.push(event);
+        }
+        // 给多个值发布相同的事件
+        mapPublish (fieldsList, event) {
+            fieldsList.forEach(fields => {
+                this.publish(fields, event);
+            });
+        }
+        // 触发一个队列上的全部事件
+        trigger (fields, value) {
+            // 获取事件队列信息
+            const centerInfo = fields.split('.').reduce((currentCenter, field) => {
+                return currentCenter.children[field];
+            }, this);
+            // 迭代执行 这里的value参数是每次修改后的$data中的值
+            centerInfo.events.forEach(event => event(value));
+        }
+    }
+
     // 观察数据类
     // TODO 这里需要添加观察数组变化的方法
     class Observer {
         constructor(vm) {
-            this.observeObject(vm.$data);
+            this.observeObject(vm.$data, vm.$eventCenter, []);
         }
-        observeObject (obj) {
+        observeObject (obj, eventCenter, parentFields) {
             for (const fieldName in obj) {
                 const value = obj[fieldName];
-                this.observe(obj, fieldName, value);
+                const currentFields = parentFields.concat(fieldName);
+                this.observe(obj, fieldName, value, eventCenter, currentFields);
                 // 如果这个值是对象，则需要递归观察对象
                 if (typeof value === 'object') {
-                    this.observeObject(value);
+                    this.observeObject(value, eventCenter, currentFields);
                 }
             }
         }
         // 观察方法
-        observe (dataSource, fieldName, value) {
+        observe (dataSource, fieldName, value, eventCenter, fieldsList) {
             Object.defineProperty(dataSource, fieldName, {
                 get () {
                     return value;
@@ -328,21 +391,48 @@
                         this.observeObject(newValue);
                     }
                     value = newValue;
+                    eventCenter.trigger(fieldsList.join('.'), value);
                 }
             })
         }
     }
 
-    class ElementNode {
-        static inputNodeNameList = ['input', 'select', 'textarea'];
-        // 获取节点标签类型
+    class VNode {
         constructor(node) {
-            this.isInputNode = ElementNode.inputNodeNameList.includes(node.nodeName.toLowerCase());
             this.node = node;
         }
         // 获取节点
         getNode () {
             return this.node;
+        }
+    }
+
+    class ElementNode extends VNode {
+        static inputNodeNameList = ['input', 'select', 'textarea'];
+        // 获取节点标签类型
+        constructor(node) {
+            super(node);
+            this.isInputNode = ElementNode.inputNodeNameList.includes(node.nodeName.toLowerCase());
+        }
+    }
+
+    class ContentNode extends VNode {
+        constructor (node) {
+            super(node);
+            // 存储节点示例的一些状态，包括事件
+            this.state = {};
+        }
+        // 更新节点内容
+        updateContent (vm) {
+            const expressionResult = Expression.getTemplateExpressionResult(vm, this.node);
+            this.node.textContent = expressionResult;
+        }
+        // 查询数据绑定并发布事件
+        addEventListener (vm) {
+            const { $eventCenter } = vm;
+            const fieldsList = Expression.getExpressionVariableNameListAfterFilter(this.node.textContent);
+            // 如果找到了变量字段才发布事件
+            if (fieldsList) $eventCenter.mapPublish(fieldsList, () => this.updateContent(vm));
         }
     }
 
@@ -354,10 +444,12 @@
         vm.$el = element;                       // 挂载的元素
         vm.$data = data;                        // 内容为数据
         vm.$template = template;                // 模板字符串内容
+        vm.$eventCenter = new EventCenter();    // 事件中心
         // 劫持数据对象
         vm.$observer = new Observer(vm);        // 包含观测数据的方法
         // 编译
         vm.$complie = new Compile(vm);          // 包含编译的方法
+
     };
     global.Vue = Vue;
 })(window, document)
